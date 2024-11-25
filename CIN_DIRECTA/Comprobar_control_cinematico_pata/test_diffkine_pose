@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+
+import rospy
+from sensor_msgs.msg import JointState
+import numpy as np
+from markers_1 import *
+from lab6functions import *
+import os
+
+def euler_to_rotation_matrix(roll, pitch, yaw):
+    """
+    Convierte los ángulos de Euler (roll, pitch, yaw) a una matriz de rotación.
+    
+    Parámetros:
+    roll -- Ángulo de rotación alrededor del eje X (en radianes)
+    pitch -- Ángulo de rotación alrededor del eje Y (en radianes)
+    yaw -- Ángulo de rotación alrededor del eje Z (en radianes)
+    
+    Retorna:
+    matriz de rotación 3x3.
+    """
+    R_x = np.array([
+        [1, 0, 0],
+        [0, np.cos(roll), -np.sin(roll)],
+        [0, np.sin(roll), np.cos(roll)]
+        ])
+    
+    R_y = np.array([
+        [np.cos(pitch), 0, np.sin(pitch)],
+        [0, 1, 0],
+        [-np.sin(pitch), 0, np.cos(pitch)]
+        ])
+    
+    R_z = np.array([
+        [np.cos(yaw), -np.sin(yaw), 0],
+        [np.sin(yaw), np.cos(yaw), 0],
+        [0, 0, 1]
+        ])
+    
+    # La matriz de rotación total es la multiplicación de las tres matrices
+    R = np.dot(R_z, np.dot(R_y, R_x))
+    return R
+
+
+if __name__ == '__main__':
+    # Initialize the node
+    rospy.init_node("testKineControlPose")
+    print('starting motion ... ')
+    
+    # Publisher: publish to the joint_states topic
+    pub = rospy.Publisher('joint_states', JointState, queue_size=1000)
+    
+    # Markers for the current and desired positions
+    bmarker_current  = FrameMarker()
+    bmarker_desired = FrameMarker(0.5)
+    
+    # Joint names
+    jnames = ['HL_HipX', 'HL_HipY', 'HL_Knee']
+    
+    # Desired pose
+    roll = 0.2  # Ejemplo de roll (en radianes)
+    pitch = 0.0  # Ejemplo de pitch (en radianes)
+    yaw = 0.0  # Ejemplo de yaw (en radianes)
+
+    # Convertir los ángulos de Euler a matriz de rotación
+    #Rd = euler_to_rotation_matrix(roll, pitch, yaw)
+
+
+    Rd = np.array([[1, 0, 0], [0, 0.878,  -0.479], [0,  0.479,  0.878]])
+    qd = Quaternion(matrix=Rd)
+    # Find an xd that the robot can reach
+    xd = np.array([-0.261, 0.297, -0.276, qd.w, qd.x, qd.y, qd.z])
+    
+    # Initial configuration
+    q0 = np.array([0.0, 0.0, 0.0])
+    
+    # Resulting initial pose (end effector with respect to the base link)
+    T = fkine(q0)
+    x0 = TF2xyzquat(T)
+    
+    # Markers for the current and the desired pose
+    bmarker_current.setPose(x0)
+    bmarker_desired.setPose(xd)
+    
+    # Instance of the JointState message
+    jstate = JointState()
+    # Values of the message
+    jstate.header.stamp = rospy.Time.now()
+    jstate.name = jnames
+    # Add the head joint value (with value 0) to the joints
+    jstate.position = q0
+    
+    # Frequency (in Hz) and control period 
+    freq = 200
+    dt = 1.0 / freq
+    rate = rospy.Rate(freq)
+    
+    # Initial joint configuration
+    q = copy(q0)
+    x = copy(x0)
+    
+    # Create a temporary file path
+    file_path = '/tmp/robot_pose_data.txt'
+    
+    # Open the file in append mode
+    with open(file_path, 'a') as file:
+        # Write the header for the data file
+        file.write('Time(s)\tJoint_1\tJoint_2\tJoint_3\tPos_x\tPos_y\tPos_z\tQuat_w\tQuat_x\tQuat_y\tQuat_z\tError_x\tError_y\tError_z\tError_qw\tError_qx\tError_qy\tError_qz\n')
+        
+        # Main loop
+        while not rospy.is_shutdown():
+            # Current time (needed for ROS)
+            jstate.header.stamp = rospy.Time.now()
+            
+            # Calculate the error between poses
+            err_pose = PoseError(x, xd)
+            
+            # Compute the Jacobian for the current configuration
+            J = jacobian_pose(q)
+
+            # Calculate the Moore-Penrose pseudo-inverse of the Jacobian
+            J_pseudo_inv = np.linalg.pinv(J)
+
+            # Calculate the pose error
+            error_pos = err_pose[0:3]  # Position error (x, y, z)
+            error_orient = err_pose[3:7]  # Orientation error (quaternion)
+            
+            # Calculate the joint velocity to minimize the error using the pseudo-inverse
+            dq = np.dot(J_pseudo_inv, np.hstack((error_pos, error_orient)))
+
+            # Update the joint positions (integrating joint velocity)
+            q = q + dq * dt
+            
+            # Current configuration transformation to current position
+            T = fkine(q)
+            x = TF2xyzquat(T)
+
+            # Publish the message
+            jstate.position = q
+            pub.publish(jstate)
+            
+            # Set the markers for visualization
+            bmarker_desired.setPose(xd)
+            bmarker_current.setPose(x)
+            
+            # Save data to file: time, joint positions, current position, and errors
+            current_time = rospy.get_time()
+            file.write(f'{current_time:.4f}\t')
+            file.write('\t'.join([f'{value:.4f}' for value in q]) + '\t')  # Joint positions
+            file.write('\t'.join([f'{value:.4f}' for value in x[0:3]]) + '\t')  # Position (x, y, z)
+            file.write('\t'.join([f'{value:.4f}' for value in x[3:7]]) + '\t')  # Orientation (quaternion)
+            file.write('\t'.join([f'{value:.4f}' for value in error_pos]) + '\t')  # Position error
+            file.write('\t'.join([f'{value:.4f}' for value in error_orient]) + '\n')  # Orientation error
+            
+            # Wait for the next iteration
+            rate.sleep()

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+
+
+    <param name="robot_description" command="$(find xacro)/xacro --inorder '$(find lite2_description)/xacro/robot.xacro'"/>
+
+    <param name="reference_frame" value="map"/> 
+
+    <arg name="frame" value="map"/>
+    <arg name="child_frame" value="base_link"/>
+
+
+   <node name="robot_pose_publisher" pkg="lite2_description" type="robot_pose_publisher" args="_frame:=$(arg frame) _child_frame:=$(arg child_frame)">
+   </node>
+   
+    <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher"/>
+
+    <node pkg="rviz" type="rviz" name="rviz" respawn="false" output="screen"
+        args="-d $(find lite2_description)/launch/check_joint.rviz"/>
+        <!-- <node pkg="rviz" type="rviz" name="rviz" respawn="false" output="screen"
+        args="-d $(find lite2_description)/launch/check_joint.rviz"/> -->
+
+</launch>

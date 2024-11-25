@@ -1,0 +1,109 @@
+#!/usr/bin/python3
+
+import rospy
+from sensor_msgs.msg import JointState
+from markers import *
+from lab3functions import *
+import numpy as np
+
+# Nombres de las articulaciones para la pata delantera derecha
+jnames = ['HR_HipX', 'HR_HipY', 'HR_Knee',
+          'FR_HipX', 'FR_HipY', 'FR_Knee',
+          'FL_HipX', 'FL_HipY', 'FL_Knee',
+          'HL_HipX', 'HL_HipY', 'HL_Knee',
+          'x', 'y', 'z', 'w', 'ex', 'ey','ez']
+
+# Configuración inicial de la pata delantera derecha
+angle = 0.0
+q0 = [0.0, 0.0, 0.0,
+      0.0, 0.0, 0.0,
+      0.0, 0.0, 0.0,
+      0.0, 0.0, 0.0,
+      0.0, 0.0, 0.0,
+      np.cos(angle/2.0), 0.0, np.sin(angle/2.0), 0.0]
+
+# Cinemática directa para la pata delantera derecha
+cuadrupedo = Cuadrupedo1()
+cuadrupedo.definir_q(q0)
+
+# Inicializar el nodo de ROS
+rospy.init_node('test')
+
+# Frecuencia del bucle
+dt = 0.1
+freq = 1.0 / dt
+
+# Marcadores de bolas para visualización
+bmarker1 = BallMarker(color['GREEN'])
+bmarker2 = BallMarker(color['YELLOW'])
+
+# Publicador para los estados de las articulaciones
+pub = rospy.Publisher('/joint_states', JointState, queue_size=10)
+
+# Creación de un mensaje
+jstate = JointState()
+jstate.name = jnames
+jstate.position = q0
+
+# Inicialización de la configuración de las articulaciones
+cuadrupedo.definir_q(q0)
+
+P1 = cuadrupedo.cin_Pata_base(2)[0:3, 3]
+
+# Establecer el objetivo para la pata
+P1_obj = np.copy(P1)
+P1_obj[0] += 0.2  # Modificar posición objetivo en X
+P1_obj[1] += 0.1  # Modificar posición objetivo en Y
+P1_obj[2] += 0.1  # Modificar posición objetivo en Z
+
+# Tasa de actualización
+rate = rospy.Rate(freq)
+t0 = rospy.get_time()
+
+# Definir `q` como una copia de `q0` al inicio
+q = np.copy(q0)
+
+# Bucle principal
+while not rospy.is_shutdown():
+    t = np.round(rospy.get_time() - t0, 3)
+    
+    # Obtener la posición actual de la pata
+    P1_actual = cuadrupedo.cin_Pata_base(2)[0:3, 3]
+    print(f"P1_actual: {P1_actual}")  # Verifica si esta es la posición esperada
+    # Calcular el error entre la posición actual y el objetivo
+    EP1 = P1_obj - P1_actual
+
+    de_d = -0.5 * EP1
+
+    # Imprimir el error para monitorear la convergencia
+    #print(f"Tiempo: {t}, Error: {EP1}")
+    
+    # Calcular el Jacobiano para la pata
+    JD = cuadrupedo.jacobian_pata_base(2)[0:3, :]
+    
+    print(f"JD: {t}, Error: {JD}")
+
+    # Resolver velocidades articulares con el Jacobiano pseudoinverso
+    if np.linalg.matrix_rank(JD, 1e-4) < 3:
+        dq_d = JD.T @ np.linalg.inv(JD @ JD.T + 0.01 * np.eye(3)) @ de_d
+    else:
+        dq_d = np.linalg.inv(JD) @ de_d
+    
+    print(dq_d)
+    # Actualizar solo las primeras tres articulaciones con la información de `dq`
+    q[6:9] += dt * dq_d  # Solo actualizar las articulaciones relevantes de la pata
+    
+    # Actualizar la configuración del robot
+    cuadrupedo.definir_q(q)
+
+    # Publicar las posiciones articulares actualizadas
+    jstate.header.stamp = rospy.Time.now()
+    jstate.position = q
+    pub.publish(jstate)
+    
+    # Mostrar el marcador en la posición objetivo
+    bmarker1.xyz(P1_obj)
+    bmarker2.xyz(P1_actual)
+    
+    # Esperar hasta la siguiente iteración
+    rate.sleep()

@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+import rospy
+from sensor_msgs.msg import JointState
+from markers import *
+from lab3functions import *
+
+
+if __name__ == '__main__':
+    rospy.init_node("control_FR_leg")
+    pub = rospy.Publisher('joint_states', JointState, queue_size=1)
+
+    bmarker1 = BallMarker(color['GREEN'])
+    bmarker2 = BallMarker(color['YELLOW'])
+    bmarker3 = BallMarker(color['CYAN'])
+    bmarker4 = BallMarker(color['DARKGRAY'])
+
+    # Nombres de las articulaciones para la pata delantera derecha
+    jnames = ['HR_HipX', 'HR_HipY', 'HR_Knee','FR_HipX', 'FR_HipY', 'FR_Knee','FL_HipX', 'FL_HipY', 'FL_Knee','HL_HipX', 'HL_HipY', 'HL_Knee','x', 'y', 'z', 'w', 'ex', 'ey','ez']
+    # 1234
+    # Configuración inicial de la pata delantera derecha
+
+    angle = 0
+    q = [0.7,-0.7,-0.7,#0
+         0.7,0.7,0.7,#1
+         0.0,0.0,0.0,#2
+         0.7,-0.7,-0.7,#3
+          0.0,0.0,0.4,
+          np.cos(angle/2.0), 0.0, np.sin(angle/2.0), 0.0]  # Ajusta los valores según lo que necesites
+
+    # Cinemática directa para la pata delantera derecha
+    #TD1,TD2,TD3,TD4 = Robot_cinematica_pata(q,0,0,0,0,0,0)  # Cambia esta función a la que corresponda para tu cuadrúpedo
+    
+    cuadrupedo = Cuadrupedo1()
+    cuadrupedo.definir_q(q)
+
+    TD1 = cuadrupedo.cin_Pata_inercia(0)
+    TD2 = cuadrupedo.cin_Pata_inercia(1)
+    TD3 = cuadrupedo.cin_Pata_inercia(2)
+    TD4 = cuadrupedo.cin_Pata_inercia(3)
+
+    print(np.round(TD1, 3))
+    print(np.round(TD2, 3))
+    print(np.round(TD3, 3))
+    print(np.round(TD4, 3))
+    bmarker1.position(TD1)
+    bmarker2.position(TD2)
+    bmarker3.position(TD3)
+    bmarker4.position(TD4)
+
+    # Mensaje de tipo JointState
+    jstate = JointState()
+    jstate.header.stamp = rospy.Time.now()
+    jstate.name = jnames
+    jstate.position = q
+
+    # Frecuencia de publicación
+    rate = rospy.Rate(20)
+
+    while not rospy.is_shutdown():
+        jstate.header.stamp = rospy.Time.now()
+        pub.publish(jstate)
+        bmarker1.publish()
+        bmarker2.publish()
+        bmarker3.publish()
+        bmarker4.publish()
+        rate.sleep()

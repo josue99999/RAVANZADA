@@ -1,0 +1,144 @@
+#!/usr/bin/python3
+import matplotlib.pyplot as plt
+
+
+import rospy
+from sensor_msgs.msg import JointState
+from markers import *
+from lab5functions import *
+from lab3functions import *
+from utils import Tmat, quaternionMult
+
+# Nombres de las articulaciones para la pata delantera derecha
+jnames = ['x', 'y', 'z', 'w', 'ex', 'ey','ez',
+          'HR_HipX', 'HR_HipY', 'HR_Knee',
+          'FR_HipX', 'FR_HipY', 'FR_Knee',
+          'FL_HipX', 'FL_HipY', 'FL_Knee',
+          'HL_HipX', 'HL_HipY', 'HL_Knee']
+# 1234
+# Configuración inicial de la pata delantera derecha
+
+angle = 0.0
+q0 = [0.0,0.0,0.4,
+      np.cos(angle/2.0), 0.0, np.sin(angle/2.0), 0.0,
+      0.0,0.0,0.0,
+      0.0,0.0,0.0,
+      0.0,0.0,0.0,
+      0.0,0.0,0.0]  # Ajusta los valores según lo que necesites
+
+# Cinemática directa para la pata delantera derecha
+
+cuadrupedo = Cuadrupedo1()
+cuadrupedo.update_config(q0)
+
+
+# Initialize the node
+rospy.init_node('test')
+# Loop frequency
+dt = 0.01
+freq = 1.0/dt
+
+# Initialize kinematic controller
+weights = [1.0, 1.0, 1.0, 1.0]
+#lambdas = [0.01, 0.01, 0.01, 0.01]
+#lambdas = [0.1, 0.1, 0.1, 0.1]
+lambdas = [0.1, 0.1, 0.1, 0.1]
+#lambdas = [1.0, 1.0, 1.0, 1.0]
+#lambdas = [10.0, 10.0, 10.0, 10.0]
+solver = OSQPController(weights, lambdas, dt)
+
+# Ball markers
+bmarker1 = BallMarker(color['GREEN'])
+bmarker2 = BallMarker(color['YELLOW'])
+bmarker3 = BallMarker(color['CYAN'])
+bmarker4 = BallMarker(color['DARKGRAY'])
+
+# Publisher for joint states 
+pub = rospy.Publisher('/joint_states', JointState, queue_size=10)
+# Creation of a message
+jstate = JointState()
+jstate.name = jnames
+jstate.position = q0
+
+cuadrupedo.update_config(q0)
+
+P1 = cuadrupedo.cin_Pata_inercia(0)[0:3,3]
+P2 = cuadrupedo.cin_Pata_inercia(1)[0:3,3]
+P3 = cuadrupedo.cin_Pata_inercia(2)[0:3,3]
+P4 = cuadrupedo.cin_Pata_inercia(3)[0:3,3]
+
+# Change initial configuration
+P1[2] += 0.15
+P1[0] += 0.05
+
+# Create logs
+fpfr_des = open("/tmp/pfr_des.txt", "w")
+fq = open("/tmp/q.txt", "w")
+fpfr = open("/tmp/pfr.txt", "w")
+
+rate = rospy.Rate(freq)
+q = np.copy(q0)
+
+
+t0 = rospy.get_time()
+while not rospy.is_shutdown():
+    t = np.round(rospy.get_time() - t0, 3)
+    print (t)
+    fpfr_des.write(str(t)+" "+str(P1[0])+" "+str(P1[1])+" "+str(P1[2])+"\n")
+    fq.write(str(t)+" ")
+    for j in range(19):
+        fq.write(str(q[j])+" ")
+    fq.write("\n")
+    pfr = cuadrupedo.cin_Pata_inercia(0)[0:3,3]
+    fpfr.write(str(t)+" "+str(pfr[0])+" "+str(pfr[1])+" "+str(pfr[2])+"\n")
+    # Errors
+    EP1 = cuadrupedo.error_Pata_inercia(0,P1)
+    EP2 = cuadrupedo.error_Pata_inercia(1,P2)
+    EP3 = cuadrupedo.error_Pata_inercia(2,P3)
+    EP4 = cuadrupedo.error_Pata_inercia(3,P4)
+
+
+    #print(J11)
+
+    J1 = cuadrupedo.jacobian_Pata_inercia(0)[0:3,:]
+    J2 = cuadrupedo.jacobian_Pata_inercia(1)[0:3,:]
+    J3 = cuadrupedo.jacobian_Pata_inercia(2)[0:3,:]
+    J4 = cuadrupedo.jacobian_Pata_inercia(3)[0:3,:]
+    
+    #print(J2)
+
+    # Get the joint velocity
+    dq = solver.get_dq(q, EP1, J1,  EP2, J2 , EP3, J3,  EP4, J4)
+
+    # Integrate rotation
+    w = np.dot(Tmat(q), dq[3:7])
+    dth = np.linalg.norm(w)
+
+    if abs(dth)>1e-9:
+        u = w/dth
+        dQ = np.array([np.cos(dth*dt/2.0), u[0]*np.sin(dth*dt/2.0), u[1]*np.sin(dth*dt/2.0), u[2]*np.sin(dth*dt/2.0)])
+        Q = quaternionMult(dQ, q[3:7])
+        q[3:7] = Q
+
+    # Integrate position and joint configuration
+    q[0:3] = q[0:3] + dt*dq[0:3]
+    q[7:]  = q[7:] + dt*dq[7:]
+    
+
+    # Update the robot configuration
+    cuadrupedo.update_config(q)
+
+    # Set message
+    jstate.header.stamp = rospy.Time.now()
+    jstate.position = q
+    pub.publish(jstate)
+    
+    # Show the markers
+    bmarker1.xyz(P1)
+    bmarker2.xyz(P2)
+    bmarker3.xyz(P3)
+    bmarker4.xyz(P4)
+    
+    rate.sleep()
+
+
